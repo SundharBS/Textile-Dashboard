@@ -3,14 +3,36 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+import io
+from datetime import date
 
 # 🔄 Auto refresh
 st_autorefresh(interval=15000, key="refresh")
 
 st.set_page_config(layout="wide")
-st.title("📊 Textile Fundraising Dashboard")
+st.title("📊 Financial Dashboard (Flexible)")
 
-# 📌 Textile Peers
+# =========================
+# 📅 DATE SELECTION
+# =========================
+st.sidebar.header("📅 Select Date Range")
+
+start_date = st.sidebar.date_input("Start Date", date(2023, 1, 1))
+end_date = st.sidebar.date_input("End Date", date.today())
+
+# =========================
+# 🔍 CUSTOM STOCK INPUT
+# =========================
+st.sidebar.header("🔍 Search Stocks")
+
+custom_tickers = st.sidebar.text_input(
+    "Enter Tickers (comma-separated)",
+    "RELIANCE.NS, TCS.NS"
+)
+
+custom_list = [t.strip() for t in custom_tickers.split(",") if t.strip()]
+
+# 📌 Default Textile Peers
 peers = {
     "VTL.NS": "Vardhman Textiles",
     "ARVIND.NS": "Arvind Ltd",
@@ -20,19 +42,27 @@ peers = {
 }
 
 # =========================
-# 🔥 GLOBAL COMPARABLES (STABLE)
+# 📥 EXCEL FUNCTION
+# =========================
+def to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
+# =========================
+# 🔥 COMPARABLES (TEXTILE)
 # =========================
 comp_data = []
 
 for ticker, name in peers.items():
     try:
-        data = yf.download(ticker, period="1y")
+        data = yf.download(ticker, start=start_date, end=end_date)
 
         if data.empty:
             continue
 
         close_prices = data['Close']
-
         if isinstance(close_prices, pd.DataFrame):
             close_prices = close_prices.iloc[:, 0]
 
@@ -53,7 +83,9 @@ for ticker, name in peers.items():
 
 comp_df = pd.DataFrame(comp_data)
 
-# 🧩 Tabs
+# =========================
+# 🧩 TABS
+# =========================
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 Market",
     "🏭 Comparables",
@@ -63,27 +95,18 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # =========================
-# 📊 TAB 1: MARKET
+# 📊 TAB 1: MARKET (CUSTOM STOCKS)
 # =========================
 with tab1:
-    st.header("Market Overview")
+    st.header("Market Overview (Custom Stocks)")
 
-    stocks = st.multiselect(
-        "Select Stocks",
-        list(peers.keys()),
-        default=["VTL.NS", "KPRMILL.NS"]
-    )
+    for stock in custom_list:
+        st.subheader(stock)
 
-    period = st.selectbox("Time Period", ["1mo", "3mo", "6mo", "1y"])
-
-    portfolio_value = 0
-
-    for stock in stocks:
-        st.subheader(f"{peers.get(stock)} ({stock})")
-
-        data = yf.download(stock, period=period)
+        data = yf.download(stock, start=start_date, end=end_date)
 
         if data.empty:
+            st.warning(f"No data for {stock}")
             continue
 
         data = data.reset_index()
@@ -98,8 +121,6 @@ with tab1:
         current_price = float(close_prices.iloc[-1])
         prev_price = float(close_prices.iloc[-2])
 
-        portfolio_value += current_price
-
         data['MA20'] = close_prices.rolling(20).mean()
 
         st.metric("Price", round(current_price, 2), round(current_price - prev_price, 2))
@@ -111,10 +132,6 @@ with tab1:
         fig.update_layout(template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
-    st.metric("Total Portfolio Value", round(portfolio_value, 2))
-
-
 # =========================
 # 🏭 TAB 2: COMPARABLES
 # =========================
@@ -123,17 +140,24 @@ with tab2:
 
     if not comp_df.empty:
         st.dataframe(comp_df)
-    else:
-        st.warning("Comparables data not available")
 
+        excel_data = to_excel(comp_df)
+
+        st.download_button(
+            "📥 Download Comparables",
+            data=excel_data,
+            file_name="comparables.xlsx"
+        )
+    else:
+        st.warning("No comparables data")
 
 # =========================
-# 💰 TAB 3: VALUATION + RECOMMENDATION
+# 💰 TAB 3: VALUATION
 # =========================
 with tab3:
-    st.header("Client Valuation Estimator")
+    st.header("Valuation")
 
-    client_ebitda = st.number_input("Client EBITDA (₹)", value=80000000)
+    client_ebitda = st.number_input("Client EBITDA", value=80000000)
 
     if not comp_df.empty:
         avg_return = comp_df["Return (%)"].mean()
@@ -141,42 +165,27 @@ with tab3:
 
         valuation = client_ebitda * (1 + avg_return/100) * 8
 
-        low = valuation * 0.9
-        high = valuation * 1.1
+        st.metric("Estimated Value", round(valuation, 2))
 
-        st.metric("Estimated Valuation (₹)", round(valuation, 2))
-        st.write(f"Valuation Range: ₹{round(low)} - ₹{round(high)}")
-
-        # 🎯 Recommendation Engine
+        # Recommendation
         st.markdown("---")
-        st.header("📌 Investment Recommendation")
-
-        if avg_return > 15 and avg_volatility < 0.02:
-            st.success("Strong growth + low risk → Ideal time to raise funds")
-
-        elif avg_return > 10:
-            st.info("Good growth → Raise funds with moderate confidence")
-
+        if avg_return > 15:
+            st.success("Raise funds now")
         elif avg_return < 0:
-            st.warning("Negative sector trend → Consider delaying fundraising")
-
+            st.warning("Delay fundraising")
         else:
-            st.info("Stable conditions → Neutral timing")
-
-    else:
-        st.warning("Comparables data not available")
-
+            st.info("Neutral conditions")
 
 # =========================
 # 📈 TAB 4: INDUSTRY
 # =========================
 with tab4:
-    st.header("Textile Sector Performance")
+    st.header("Industry Performance")
 
     fig = go.Figure()
 
     for ticker in peers.keys():
-        data = yf.download(ticker, period="6mo")
+        data = yf.download(ticker, start=start_date, end=end_date)
 
         if not data.empty:
             close_prices = data['Close']
@@ -187,20 +196,18 @@ with tab4:
 
             fig.add_trace(go.Scatter(x=data.index, y=normalized, name=ticker))
 
-    fig.update_layout(template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
-
 
 # =========================
 # ⚠️ TAB 5: RISK
 # =========================
 with tab5:
-    st.header("Risk Analysis (Volatility)")
+    st.header("Risk Analysis")
 
     risk_data = []
 
     for ticker in peers.keys():
-        data = yf.download(ticker, period="3mo")
+        data = yf.download(ticker, start=start_date, end=end_date)
 
         if not data.empty:
             close_prices = data['Close']
@@ -214,5 +221,4 @@ with tab5:
                 "Volatility": round(float(vol), 4)
             })
 
-    risk_df = pd.DataFrame(risk_data)
-    st.dataframe(risk_df)
+    st.dataframe(pd.DataFrame(risk_data))

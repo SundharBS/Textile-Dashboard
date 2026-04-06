@@ -127,6 +127,35 @@ with tab1:
 with tab2:
     st.header("Textile Comparable Companies")
     st.dataframe(comp_df)
+    comp_data = []
+
+for ticker, name in peers.items():
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+
+        market_cap = info.get("marketCap")
+        ebitda = info.get("ebitda")
+
+        # 🔥 fallback if API fails
+        if market_cap is None or ebitda is None or ebitda == 0:
+            hist = t.history(period="1d")
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                market_cap = price * 1e7  # rough estimate
+                ebitda = market_cap / 8   # assume avg multiple
+
+        comp_data.append({
+            "Company": name,
+            "Ticker": ticker,
+            "Market Cap": market_cap,
+            "EBITDA": ebitda
+        })
+
+    except:
+        continue
+
+comp_df = pd.DataFrame(comp_data)
 
 
 # =========================

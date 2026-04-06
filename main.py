@@ -2,15 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from streamlit_autorefresh import st_autorefresh
-import io
 from datetime import date
-
-# 🔄 Auto refresh
-st_autorefresh(interval=15000, key="refresh")
+import io
 
 st.set_page_config(layout="wide")
-st.title("📊 Financial Dashboard")
+st.title("📊 Industry Analysis Dashboard")
 
 # =========================
 # 📅 DATE INPUT
@@ -25,251 +21,214 @@ if start_date >= end_date:
     st.stop()
 
 # =========================
-# 🔍 STOCK INPUT
+# 🏭 INDUSTRIES (EXPANDED)
 # =========================
-st.sidebar.header("🔍 Stocks")
+industry_map = {
+    "Technology": ["AAPL", "MSFT", "GOOGL", "NVDA", "META", "AMD"],
+    "Banking": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS"],
+    "Energy": ["RELIANCE.NS", "ONGC.NS", "BPCL.NS", "IOC.NS"],
+    "FMCG": ["HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "DABUR.NS"],
+    "Pharma": ["SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS"],
+    "Auto": ["TATAMOTORS.NS", "MARUTI.NS", "M&M.NS"],
+    "Metals": ["TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS"]
+}
 
-stock_input = st.sidebar.text_input(
-    "Enter Stocks (comma-separated)",
-    "RELIANCE.NS, TCS.NS"
+selected_industry = st.sidebar.selectbox(
+    "Select Industry",
+    list(industry_map.keys())
 )
 
-stock_list = [s.strip().upper() for s in stock_input.split(",") if s.strip()]
+available_stocks = industry_map[selected_industry]
 
-# =========================
-# 🏭 PEER INPUT
-# =========================
-st.sidebar.header("🏭 Peer Group")
-
-peer_input = st.sidebar.text_input(
-    "Enter Peer Stocks (comma-separated)",
-    "INFY.NS, HDFCBANK.NS"
+selected_stocks = st.sidebar.multiselect(
+    "Select Companies",
+    available_stocks,
+    default=available_stocks[:3]
 )
 
-peer_list = [p.strip().upper() for p in peer_input.split(",") if p.strip()]
+tickers = selected_stocks
 
 # =========================
-# 📥 EXCEL FUNCTION
+# 📊 BENCHMARK
 # =========================
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False)
-    return output.getvalue()
+benchmark = "^NSEI" if any(".NS" in t for t in tickers) else "^GSPC"
+
+bench_data = yf.download(benchmark, start=start_date, end=end_date)
+
+if not bench_data.empty:
+    bench_close = bench_data['Close']
+    if isinstance(bench_close, pd.DataFrame):
+        bench_close = bench_close.iloc[:, 0]
+    bench_return = float((bench_close.iloc[-1] / bench_close.iloc[0] - 1) * 100)
+else:
+    bench_return = 0
 
 # =========================
-# 🔧 SAFE DOWNLOAD FUNCTION
+# 🔥 DATA FETCH
 # =========================
-def get_close(data):
-    if 'Close' not in data:
-        return None
+data_dict = {}
 
-    close = data['Close']
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-
-    return close.dropna()
-
-# =========================
-# 🔥 COMPARABLES
-# =========================
-comp_data = []
-
-for ticker in peer_list:
+for ticker in tickers:
     try:
         data = yf.download(ticker, start=start_date, end=end_date)
 
-        close_prices = get_close(data)
-
-        if close_prices is None or len(close_prices) < 2:
+        if data.empty:
             continue
 
-        price = float(close_prices.iloc[-1])
-        returns = (close_prices.iloc[-1] / close_prices.iloc[0]) - 1
-        volatility = close_prices.pct_change().std()
+        close = data['Close']
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
 
-        comp_data.append({
-            "Ticker": ticker,
-            "Price": round(price, 2),
-            "Return (%)": round(returns * 100, 2),
-            "Volatility": round(float(volatility), 4)
-        })
+        if len(close) < 2:
+            continue
+
+        returns = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
+        volatility = float(close.pct_change().std())
+        ma20 = close.rolling(20).mean().iloc[-1]
+
+        data_dict[ticker] = {
+            "prices": close,
+            "return": returns,
+            "volatility": volatility,
+            "ma20": ma20,
+            "current": float(close.iloc[-1])
+        }
 
     except:
         continue
 
-comp_df = pd.DataFrame(comp_data)
+# =========================
+# 📊 PERFORMANCE TABLE
+# =========================
+perf_data = []
+
+for ticker, val in data_dict.items():
+    momentum = "Bullish" if val["current"] > val["ma20"] else "Weak"
+
+    perf_data.append({
+        "Stock": ticker,
+        "Return (%)": round(val["return"], 2),
+        "Volatility": round(val["volatility"], 4),
+        "Momentum": momentum
+    })
+
+perf_df = pd.DataFrame(perf_data)
 
 # =========================
-# 🧩 TABS
+# 📊 DISPLAY
 # =========================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Market",
-    "🏭 Comparables",
-    "💰 Valuation",
-    "📈 Industry",
-    "⚠️ Risk"
-])
+st.header(f"{selected_industry} Industry Analysis")
 
-# =========================
-# 📊 MARKET
-# =========================
-with tab1:
-    st.header("Market Overview")
+if perf_df.empty:
+    st.error("No performance data available")
+    st.stop()
 
-    for stock in stock_list:
-        try:
-            data = yf.download(stock, start=start_date, end=end_date)
-            close_prices = get_close(data)
-
-            if close_prices is None or len(close_prices) < 2:
-                st.warning(f"No valid data for {stock}")
-                continue
-
-            df = close_prices.reset_index()
-
-            current_price = float(close_prices.iloc[-1])
-            prev_price = float(close_prices.iloc[-2])
-
-            df['MA20'] = close_prices.rolling(20).mean().values
-
-            st.subheader(stock)
-            st.metric("Price", round(current_price, 2),
-                      round(current_price - prev_price, 2))
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df['Date'], y=close_prices, name='Price'))
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['MA20'], name='MA20'))
-
-            fig.update_layout(template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
-
-        except:
-            st.warning(f"Error loading {stock}")
+st.subheader("Performance Summary")
+st.dataframe(perf_df)
 
 # =========================
-# 🏭 COMPARABLES
+# 📊 METRICS
 # =========================
-with tab2:
-    st.header("Peer Comparables")
+avg_return = float(perf_df["Return (%)"].mean())
+median_return = float(perf_df["Return (%)"].median())
+dispersion = float(perf_df["Return (%)"].std())
+avg_vol = float(perf_df["Volatility"].mean())
 
-    if not comp_df.empty:
-        st.dataframe(comp_df)
+col1, col2, col3 = st.columns(3)
 
-        st.download_button(
-            "📥 Download Comparables",
-            data=to_excel(comp_df),
-            file_name="comparables.xlsx"
-        )
-    else:
-        st.warning("No comparables data")
+col1.metric("Average Return", round(avg_return, 2))
+col2.metric("Median Return", round(median_return, 2))
+col3.metric("Dispersion", round(dispersion, 2))
 
-# =========================
-# 💰 VALUATION
-# =========================
-with tab3:
-    st.header("Valuation")
-
-    client_ebitda = st.number_input("Client EBITDA", value=80000000)
-
-    if not comp_df.empty:
-        avg_return = comp_df["Return (%)"].mean()
-        avg_volatility = comp_df["Volatility"].mean()
-
-        valuation = client_ebitda * (1 + avg_return/100) * 8
-
-        low = valuation * 0.9
-        high = valuation * 1.1
-
-        st.metric("Estimated Value", round(valuation, 2))
-        st.write(f"Range: ₹{round(low)} - ₹{round(high)}")
-
-        val_df = pd.DataFrame({
-            "Metric": ["Value", "Low", "High"],
-            "Amount": [valuation, low, high]
-        })
-
-        st.download_button(
-            "📥 Download Valuation",
-            data=to_excel(val_df),
-            file_name="valuation.xlsx"
-        )
-
-        st.markdown("---")
-
-        if avg_return > 15 and avg_volatility < 0.02:
-            st.success("Strong growth → Raise funds")
-        elif avg_return < 0:
-            st.warning("Negative trend → Delay")
-        else:
-            st.info("Neutral")
-
-    else:
-        st.warning("No comparables available")
+st.write(f"Benchmark Return: {round(bench_return,2)}%")
 
 # =========================
-# 📈 INDUSTRY
+# 🏆 TOP & BOTTOM
 # =========================
-with tab4:
-    st.header("Peer Performance")
+top3 = perf_df.sort_values("Return (%)", ascending=False).head(3)
+bottom3 = perf_df.sort_values("Return (%)").head(3)
 
-    fig = go.Figure()
-    valid = False
+col1, col2 = st.columns(2)
 
-    for ticker in peer_list:
-        try:
-            data = yf.download(ticker, start=start_date, end=end_date)
-            close_prices = get_close(data)
-
-            if close_prices is None or len(close_prices) < 2:
-                continue
-
-            normalized = close_prices / close_prices.iloc[0] * 100
-
-            fig.add_trace(go.Scatter(
-                x=close_prices.index,
-                y=normalized,
-                name=ticker
-            ))
-            valid = True
-
-        except:
-            continue
-
-    if valid:
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("No industry data")
+col1.success(f"🏆 Top Performers:\n{top3}")
+col2.error(f"📉 Bottom Performers:\n{bottom3}")
 
 # =========================
 # ⚠️ RISK
 # =========================
-with tab5:
-    st.header("Risk Analysis")
+st.subheader("Risk Analysis")
+st.write(f"Average Volatility: {round(avg_vol, 4)}")
 
-    risk_data = []
+# =========================
+# 🧠 INTERPRETATION (FIXED)
+# =========================
+st.subheader("📌 Interpretation")
 
-    for ticker in peer_list:
+if pd.isna(avg_return) or pd.isna(avg_vol):
+    st.warning("Insufficient data for interpretation")
+
+else:
+    if avg_return > bench_return + 5:
+        if avg_vol < 0.03:
+            st.success("🚀 Strong sector: High returns with low risk → Ideal for fundraising")
+        else:
+            st.info("📈 High growth but volatile → Selective investment")
+
+    elif avg_return > bench_return:
+        st.info("👍 Slight outperformance → Moderate opportunity")
+
+    elif avg_return < 0:
+        st.warning("📉 Negative trend → Avoid or delay investment")
+
+    else:
+        st.info("⚖️ Neutral sector → Balanced outlook")
+
+st.write(f"Avg Return: {round(avg_return,2)}% | Avg Volatility: {round(avg_vol,4)}")
+
+# =========================
+# 💰 COMPARABLES
+# =========================
+def get_comparables(tickers):
+    comp_data = []
+
+    for ticker in tickers:
         try:
-            data = yf.download(ticker, start=start_date, end=end_date)
-            close_prices = get_close(data)
+            info = yf.Ticker(ticker).info
 
-            if close_prices is None or len(close_prices) < 2:
-                continue
-
-            vol = close_prices.pct_change().std()
-
-            risk_data.append({
+            comp_data.append({
                 "Stock": ticker,
-                "Volatility": round(float(vol), 4)
+                "Market Cap": info.get("marketCap"),
+                "P/E": info.get("trailingPE"),
+                "Revenue": info.get("totalRevenue"),
+                "EBITDA": info.get("ebitda")
             })
 
         except:
             continue
 
-    risk_df = pd.DataFrame(risk_data)
+    return pd.DataFrame(comp_data)
 
-    if not risk_df.empty:
-        st.dataframe(risk_df)
-    else:
-        st.warning("No risk data")
+comp_df = get_comparables(tickers)
+
+st.subheader("Comparables")
+st.dataframe(comp_df)
+
+# =========================
+# 📥 EXCEL EXPORT
+# =========================
+def generate_excel(perf_df, comp_df):
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        perf_df.to_excel(writer, sheet_name='Performance', index=False)
+        comp_df.to_excel(writer, sheet_name='Comparables', index=False)
+
+    return output.getvalue()
+
+excel_data = generate_excel(perf_df, comp_df)
+
+st.download_button(
+    "📥 Download Full Report (Excel)",
+    data=excel_data,
+    file_name="industry_analysis.xlsx"
+)

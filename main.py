@@ -21,7 +21,7 @@ if start_date >= end_date:
     st.stop()
 
 # =========================
-# 🏭 INDUSTRIES (EXPANDED)
+# 🏭 INDUSTRIES
 # =========================
 industry_map = {
     "Technology": ["AAPL", "MSFT", "GOOGL", "NVDA", "META", "AMD"],
@@ -160,44 +160,46 @@ st.subheader("Risk Analysis")
 st.write(f"Average Volatility: {round(avg_vol, 4)}")
 
 # =========================
-# 🧠 INTERPRETATION (FIXED)
+# 🧠 INTERPRETATION
 # =========================
 st.subheader("📌 Interpretation")
 
 if pd.isna(avg_return) or pd.isna(avg_vol):
     st.warning("Insufficient data for interpretation")
-
 else:
     if avg_return > bench_return + 5:
         if avg_vol < 0.03:
             st.success("🚀 Strong sector: High returns with low risk → Ideal for fundraising")
         else:
             st.info("📈 High growth but volatile → Selective investment")
-
     elif avg_return > bench_return:
         st.info("👍 Slight outperformance → Moderate opportunity")
-
     elif avg_return < 0:
         st.warning("📉 Negative trend → Avoid or delay investment")
-
     else:
         st.info("⚖️ Neutral sector → Balanced outlook")
 
-st.write(f"Avg Return: {round(avg_return,2)}% | Avg Volatility: {round(avg_vol,4)}")
-
 # =========================
-# 💰 COMPARABLES
+# 💰 COMPARABLES (FIXED)
 # =========================
+@st.cache_data(ttl=600)
 def get_comparables(tickers):
     comp_data = []
 
     for ticker in tickers:
         try:
-            info = yf.Ticker(ticker).info
+            t = yf.Ticker(ticker)
+
+            fast = getattr(t, "fast_info", {})
+
+            try:
+                info = t.info
+            except:
+                info = {}
 
             comp_data.append({
                 "Stock": ticker,
-                "Market Cap": info.get("marketCap"),
+                "Market Cap": fast.get("market_cap") or info.get("marketCap"),
                 "P/E": info.get("trailingPE"),
                 "Revenue": info.get("totalRevenue"),
                 "EBITDA": info.get("ebitda")
@@ -211,7 +213,11 @@ def get_comparables(tickers):
 comp_df = get_comparables(tickers)
 
 st.subheader("Comparables")
-st.dataframe(comp_df)
+
+if comp_df.empty:
+    st.warning("Comparables data not available (Yahoo API limitation)")
+else:
+    st.dataframe(comp_df)
 
 # =========================
 # 📥 EXCEL EXPORT

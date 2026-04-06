@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -21,43 +20,38 @@ peers = {
 }
 
 # =========================
-# 🔥 GLOBAL COMPARABLES
+# 🔥 GLOBAL COMPARABLES (STABLE)
 # =========================
 comp_data = []
 
 for ticker, name in peers.items():
     try:
-        info = yf.Ticker(ticker).info
+        data = yf.download(ticker, period="1y")
+
+        if data.empty:
+            continue
+
+        close_prices = data['Close']
+
+        if isinstance(close_prices, pd.DataFrame):
+            close_prices = close_prices.iloc[:, 0]
+
+        price = float(close_prices.iloc[-1])
+        returns = (close_prices.iloc[-1] / close_prices.iloc[0]) - 1
+        volatility = close_prices.pct_change().std()
 
         comp_data.append({
             "Company": name,
             "Ticker": ticker,
-            "P/E": info.get("trailingPE"),
-            "Market Cap": info.get("marketCap"),
-            "Revenue": info.get("totalRevenue"),
-            "EBITDA": info.get("ebitda")
+            "Price": round(price, 2),
+            "Return (%)": round(returns * 100, 2),
+            "Volatility": round(float(volatility), 4)
         })
+
     except:
         continue
 
 comp_df = pd.DataFrame(comp_data)
-
-# =========================
-# 🔥 RISK CALCULATION (for recommendation)
-# =========================
-vol_list = []
-
-for ticker in peers.keys():
-    data = yf.download(ticker, period="3mo")
-    if not data.empty:
-        close_prices = data['Close']
-        if isinstance(close_prices, pd.DataFrame):
-            close_prices = close_prices.iloc[:, 0]
-
-        vol = close_prices.pct_change().std()
-        vol_list.append(vol)
-
-avg_volatility = float(pd.Series(vol_list).mean()) if vol_list else 0
 
 # 🧩 Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -126,36 +120,11 @@ with tab1:
 # =========================
 with tab2:
     st.header("Textile Comparable Companies")
-    st.dataframe(comp_df)
-    comp_data = []
 
-for ticker, name in peers.items():
-    try:
-        t = yf.Ticker(ticker)
-        info = t.info
-
-        market_cap = info.get("marketCap")
-        ebitda = info.get("ebitda")
-
-        # 🔥 fallback if API fails
-        if market_cap is None or ebitda is None or ebitda == 0:
-            hist = t.history(period="1d")
-            if not hist.empty:
-                price = hist['Close'].iloc[-1]
-                market_cap = price * 1e7  # rough estimate
-                ebitda = market_cap / 8   # assume avg multiple
-
-        comp_data.append({
-            "Company": name,
-            "Ticker": ticker,
-            "Market Cap": market_cap,
-            "EBITDA": ebitda
-        })
-
-    except:
-        continue
-
-comp_df = pd.DataFrame(comp_data)
+    if not comp_df.empty:
+        st.dataframe(comp_df)
+    else:
+        st.warning("Comparables data not available")
 
 
 # =========================
@@ -166,38 +135,33 @@ with tab3:
 
     client_ebitda = st.number_input("Client EBITDA (₹)", value=80000000)
 
-    comp_clean = comp_df.dropna()
+    if not comp_df.empty:
+        avg_return = comp_df["Return (%)"].mean()
+        avg_volatility = comp_df["Volatility"].mean()
 
-    if not comp_clean.empty:
-        comp_clean["EV/EBITDA"] = comp_clean["Market Cap"] / comp_clean["EBITDA"]
-
-        avg_multiple = comp_clean["EV/EBITDA"].mean()
-        valuation = client_ebitda * avg_multiple
+        valuation = client_ebitda * (1 + avg_return/100) * 8
 
         low = valuation * 0.9
         high = valuation * 1.1
 
         st.metric("Estimated Valuation (₹)", round(valuation, 2))
         st.write(f"Valuation Range: ₹{round(low)} - ₹{round(high)}")
-        st.write("Average EV/EBITDA:", round(avg_multiple, 2))
 
-        # =========================
-        # 🎯 RECOMMENDATION ENGINE
-        # =========================
+        # 🎯 Recommendation Engine
         st.markdown("---")
         st.header("📌 Investment Recommendation")
 
-        if avg_multiple > 10 and avg_volatility < 0.02:
-            st.success("Strong sector valuation + low risk → Ideal time to raise funds")
+        if avg_return > 15 and avg_volatility < 0.02:
+            st.success("Strong growth + low risk → Ideal time to raise funds")
 
-        elif avg_multiple > 10:
-            st.info("High valuation but higher risk → Raise funds with caution")
+        elif avg_return > 10:
+            st.info("Good growth → Raise funds with moderate confidence")
 
-        elif avg_multiple < 6:
-            st.warning("Sector undervalued → Consider delaying fundraising")
+        elif avg_return < 0:
+            st.warning("Negative sector trend → Consider delaying fundraising")
 
         else:
-            st.info("Fair valuation → Neutral fundraising environment")
+            st.info("Stable conditions → Neutral timing")
 
     else:
         st.warning("Comparables data not available")

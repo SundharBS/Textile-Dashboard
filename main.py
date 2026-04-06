@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -18,6 +19,45 @@ peers = {
     "WELSPUNLIV.NS": "Welspun Living",
     "KPRMILL.NS": "KPR Mill"
 }
+
+# =========================
+# 🔥 GLOBAL COMPARABLES
+# =========================
+comp_data = []
+
+for ticker, name in peers.items():
+    try:
+        info = yf.Ticker(ticker).info
+
+        comp_data.append({
+            "Company": name,
+            "Ticker": ticker,
+            "P/E": info.get("trailingPE"),
+            "Market Cap": info.get("marketCap"),
+            "Revenue": info.get("totalRevenue"),
+            "EBITDA": info.get("ebitda")
+        })
+    except:
+        continue
+
+comp_df = pd.DataFrame(comp_data)
+
+# =========================
+# 🔥 RISK CALCULATION (for recommendation)
+# =========================
+vol_list = []
+
+for ticker in peers.keys():
+    data = yf.download(ticker, period="3mo")
+    if not data.empty:
+        close_prices = data['Close']
+        if isinstance(close_prices, pd.DataFrame):
+            close_prices = close_prices.iloc[:, 0]
+
+        vol = close_prices.pct_change().std()
+        vol_list.append(vol)
+
+avg_volatility = float(pd.Series(vol_list).mean()) if vol_list else 0
 
 # 🧩 Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -45,59 +85,36 @@ with tab1:
     portfolio_value = 0
 
     for stock in stocks:
-        st.subheader(stock)
+        st.subheader(f"{peers.get(stock)} ({stock})")
 
         data = yf.download(stock, period=period)
 
         if data.empty:
-            st.warning(f"No data for {stock}")
             continue
 
         data = data.reset_index()
 
         close_prices = data['Close']
-
-        # ✅ FIX multi-index issue
         if isinstance(close_prices, pd.DataFrame):
             close_prices = close_prices.iloc[:, 0]
 
-        # Ensure enough data
         if len(close_prices) < 2:
-            st.warning(f"Not enough data for {stock}")
             continue
 
-        # ✅ FIX: convert to float
         current_price = float(close_prices.iloc[-1])
         prev_price = float(close_prices.iloc[-2])
 
         portfolio_value += current_price
 
-        # Moving Average
         data['MA20'] = close_prices.rolling(20).mean()
 
-        st.metric(
-            "Price",
-            round(current_price, 2),
-            round(current_price - prev_price, 2)
-        )
+        st.metric("Price", round(current_price, 2), round(current_price - prev_price, 2))
 
-        # Chart
         fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=data['Date'],
-            y=close_prices,
-            name='Price'
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=data['Date'],
-            y=data['MA20'],
-            name='MA20'
-        ))
+        fig.add_trace(go.Scatter(x=data['Date'], y=close_prices, name='Price'))
+        fig.add_trace(go.Scatter(x=data['Date'], y=data['MA20'], name='MA20'))
 
         fig.update_layout(template="plotly_dark")
-
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
@@ -109,51 +126,50 @@ with tab1:
 # =========================
 with tab2:
     st.header("Textile Comparable Companies")
-
-    comp_data = []
-
-    for ticker, name in peers.items():
-        try:
-            info = yf.Ticker(ticker).info
-
-            comp_data.append({
-                "Company": name,
-                "Ticker": ticker,
-                "P/E": info.get("trailingPE"),
-                "Market Cap": info.get("marketCap"),
-                "Revenue": info.get("totalRevenue"),
-                "EBITDA": info.get("ebitda")
-            })
-        except:
-            continue
-
-    comp_df = pd.DataFrame(comp_data)
-
     st.dataframe(comp_df)
 
 
 # =========================
-# 💰 TAB 3: VALUATION
+# 💰 TAB 3: VALUATION + RECOMMENDATION
 # =========================
 with tab3:
     st.header("Client Valuation Estimator")
 
     client_ebitda = st.number_input("Client EBITDA (₹)", value=80000000)
 
-    if not comp_df.empty:
-        comp_clean = comp_df.dropna()
+    comp_clean = comp_df.dropna()
 
-        if not comp_clean.empty:
-            comp_clean["EV/EBITDA"] = comp_clean["Market Cap"] / comp_clean["EBITDA"]
+    if not comp_clean.empty:
+        comp_clean["EV/EBITDA"] = comp_clean["Market Cap"] / comp_clean["EBITDA"]
 
-            avg_multiple = comp_clean["EV/EBITDA"].mean()
+        avg_multiple = comp_clean["EV/EBITDA"].mean()
+        valuation = client_ebitda * avg_multiple
 
-            valuation = client_ebitda * avg_multiple
+        low = valuation * 0.9
+        high = valuation * 1.1
 
-            st.metric("Estimated Valuation (₹)", round(valuation, 2))
-            st.write("Average EV/EBITDA:", round(avg_multiple, 2))
+        st.metric("Estimated Valuation (₹)", round(valuation, 2))
+        st.write(f"Valuation Range: ₹{round(low)} - ₹{round(high)}")
+        st.write("Average EV/EBITDA:", round(avg_multiple, 2))
+
+        # =========================
+        # 🎯 RECOMMENDATION ENGINE
+        # =========================
+        st.markdown("---")
+        st.header("📌 Investment Recommendation")
+
+        if avg_multiple > 10 and avg_volatility < 0.02:
+            st.success("Strong sector valuation + low risk → Ideal time to raise funds")
+
+        elif avg_multiple > 10:
+            st.info("High valuation but higher risk → Raise funds with caution")
+
+        elif avg_multiple < 6:
+            st.warning("Sector undervalued → Consider delaying fundraising")
+
         else:
-            st.warning("Not enough clean data")
+            st.info("Fair valuation → Neutral fundraising environment")
+
     else:
         st.warning("Comparables data not available")
 
@@ -171,20 +187,14 @@ with tab4:
 
         if not data.empty:
             close_prices = data['Close']
-
             if isinstance(close_prices, pd.DataFrame):
                 close_prices = close_prices.iloc[:, 0]
 
             normalized = close_prices / close_prices.iloc[0] * 100
 
-            fig.add_trace(go.Scatter(
-                x=data.index,
-                y=normalized,
-                name=ticker
-            ))
+            fig.add_trace(go.Scatter(x=data.index, y=normalized, name=ticker))
 
     fig.update_layout(template="plotly_dark")
-
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -201,17 +211,15 @@ with tab5:
 
         if not data.empty:
             close_prices = data['Close']
-
             if isinstance(close_prices, pd.DataFrame):
                 close_prices = close_prices.iloc[:, 0]
 
-            volatility = close_prices.pct_change().std()
+            vol = close_prices.pct_change().std()
 
             risk_data.append({
                 "Stock": ticker,
-                "Volatility": round(float(volatility), 4)
+                "Volatility": round(float(vol), 4)
             })
 
     risk_df = pd.DataFrame(risk_data)
-
     st.dataframe(risk_df)
